@@ -1,80 +1,70 @@
-// main.mjs - Discord Botのメインプログラム
-
-// 必要なライブラリを読み込み
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, ChannelType, PermissionsBitField } from 'discord.js';
 import dotenv from 'dotenv';
-import express from 'express';
-
-// .envファイルから環境変数を読み込み
 dotenv.config();
 
-// Discord Botクライアントを作成
+// --- 設定 ---
+const ENTRY_CHANNEL_ID = '1477473413722280008'; // 入り口のボイスチャンネルID
+const ALLOWED_ROLE_ID = '1477292757985919198';   // 入室・閲覧可能なロールID
+
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,           // サーバー情報取得
-        GatewayIntentBits.GuildMessages,    // メッセージ取得
-        GatewayIntentBits.MessageContent,   // メッセージ内容取得
-        GatewayIntentBits.GuildMembers,     // メンバー情報取得
-    ],
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildVoiceStates
+    ]
 });
 
-// Botが起動完了したときの処理
-client.once('ready', () => {
-    console.log(`🎉 ${client.user.tag} が正常に起動しました！`);
-    console.log(`📊 ${client.guilds.cache.size} つのサーバーに参加中`);
+client.once('ready', () => console.log('✅ プライベートルームBotが起動しました！'));
+
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    const guild = newState.guild;
+
+    // --- 1. 入室処理 ---
+    if (newState.channelId === ENTRY_CHANNEL_ID) {
+        const member = newState.member;
+        const roomName = `${member.displayName}'s Room`;
+
+        // カテゴリー作成（権限設定付き）
+        const category = await guild.channels.create({
+            name: roomName,
+            type: ChannelType.GuildCategory,
+            permissionOverwrites: [
+                { id: guild.id, deny: [PermissionsBitField.Flags.ViewChannel] }, // 全員閲覧禁止
+                { id: ALLOWED_ROLE_ID, allow: [PermissionsBitField.Flags.ViewChannel] }, // ロール保持者許可
+                { id: client.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.ManageChannels] } // Bot自身
+            ]
+        });
+
+        // ボイスチャンネル作成
+        const vChannel = await guild.channels.create({
+            name: roomName,
+            type: ChannelType.GuildVoice,
+            parent: category,
+        });
+
+        // テキストチャンネル作成
+        await guild.channels.create({
+            name: `${member.displayName}-聞き専`,
+            type: ChannelType.GuildText,
+            parent: category,
+        });
+
+        // 作成したボイスチャンネルへ移動
+        await member.voice.setChannel(vChannel).catch(console.error);
+    }
+
+    // --- 2. 退室・掃除処理 ---
+    if (oldState.channel && oldState.channel.id !== ENTRY_CHANNEL_ID && oldState.channel.parent?.permissionOverwrites.resolve(ALLOWED_ROLE_ID)) {
+        const category = oldState.channel.parent;
+        
+        // チャンネル内に誰もいなくなったら削除
+        if (oldState.channel.members.size === 0) {
+            for (const [id, ch] of category.children.cache) {
+                await ch.delete().catch(console.error);
+            }
+            await category.delete().catch(console.error);
+            console.log(`🧹 ${category.name} を削除しました`);
+        }
+    }
 });
 
-// メッセージが送信されたときの処理
-client.on('messageCreate', (message) => {
-    // Bot自身のメッセージは無視
-    if (message.author.bot) return;
-    
-    // 「ping」メッセージに反応
-    if (message.content.toLowerCase() === 'ping') {
-        message.reply('🏓 pong!');
-        console.log(`📝 ${message.author.tag} が ping コマンドを使用`);
-    }
-});
-
-// エラーハンドリング
-client.on('error', (error) => {
-    console.error('❌ Discord クライアントエラー:', error);
-});
-
-// プロセス終了時の処理
-process.on('SIGINT', () => {
-    console.log('🛑 Botを終了しています...');
-    client.destroy();
-    process.exit(0);
-});
-
-// Discord にログイン
-if (!process.env.DISCORD_TOKEN) {
-    console.error('❌ DISCORD_TOKEN が .env ファイルに設定されていません！');
-    process.exit(1);
-}
-
-console.log('🔄 Discord に接続中...');
-client.login(process.env.DISCORD_TOKEN)
-    .catch(error => {
-        console.error('❌ ログインに失敗しました:', error);
-        process.exit(1);
-    });
-
-// Express Webサーバーの設定（Render用）
-const app = express();
-const port = process.env.PORT || 3000;
-
-// ヘルスチェック用エンドポイント
-app.get('/', (req, res) => {
-    res.json({
-        status: 'Bot is running! 🤖',
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString()
-    });
-});
-
-// サーバー起動
-app.listen(port, () => {
-    console.log(`🌐 Web サーバーがポート ${port} で起動しました`);
-});
+client.login(process.env.DISCORD_TOKEN);
