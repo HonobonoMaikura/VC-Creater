@@ -1,5 +1,6 @@
 import { Client, GatewayIntentBits, ChannelType, PermissionsBitField } from 'discord.js';
 import dotenv from 'dotenv';
+import express from 'express';
 dotenv.config();
 
 // --- 設定 ---
@@ -68,3 +69,5 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+const app = express();
+app.listen(process.env.PORT || 4000);
